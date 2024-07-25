@@ -1,7 +1,7 @@
 CC := gcc
-CFLAGS := -Wall -Wextra -std=c99 -O3
+CFLAGS := -Wall -Wextra -std=c99 -O3 --pedantic -Wno-unused-parameter
 LDFLAGS :=
-SRC := $(shell find . -type f -name '*.c')
+SRC := ./eatmemory.c ./args/src/args.c
 EXE := eatmemory
 PREFIX := /usr/local
 INSTALL_DIR := $(PREFIX)/bin
