@@ -16,11 +16,14 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 #include "args/src/args.h"
 
 // Helper macros for converting bytes to MB and GB
 #define B2MB(x) ((x) / (1024 * 1024))
 #define B2GB(x) (B2MB(x) / 1024)
+int g_memset = 0;
 
 #if defined(_SC_PHYS_PAGES) && defined(_SC_AVPHYS_PAGES) && defined(_SC_PAGE_SIZE)
 #define MEMORY_PERCENTAGE
@@ -43,6 +46,7 @@ size_t getFreeSystemMemory(){
 ArgParser* configure_cmd() {
     ArgParser* parser = ap_new_parser();
     ap_add_flag(parser, "help h ?");
+    ap_add_flag(parser, "memset m");
     ap_add_int_opt(parser, "timeout t", -1);
     ap_add_int_opt(parser, "gradual g", -1);
     // ap_add_str_opt(parser, "alloc-type -a", "malloc");
@@ -51,7 +55,7 @@ ArgParser* configure_cmd() {
 
 void print_help() {
     printf("eatmemory %s - %s\n\n", VERSION, "https://github.com/julman99/eatmemory");
-    printf("Usage: eatmemory [-t <seconds>] <size>\n");
+    printf("Usage: eatmemory [-t <seconds>] [-m] [-g <seconds>] <size>\n");
     printf("Size can be specified in megabytes or gigabytes in the following way:\n");
     printf("#             # Bytes      example: 1024\n");
     printf("#M            # Megabytes  example: 15M\n");
@@ -61,6 +65,7 @@ void print_help() {
 #endif
     printf("\n");
     printf("Options:\n");
+    printf("-m            Call memset on allocated memory");
     printf("-t <seconds>  Exit after specified number of seconds\n");
     printf("-g <seconds>  Gradual memory allocation till <gradual> second upto <size>.\n");
     printf("              Must be less than <timeout> if set.\n");
@@ -76,7 +81,9 @@ short** eat(long total,int chunk){
         if(buffer==NULL){
             return NULL;
         }
-		memset(buffer,0,chunk);
+		if (g_memset == 1) {
+            memset(buffer,0,chunk);
+        }
         allocations[i] = buffer;
 	}
     return allocations;
@@ -104,6 +111,10 @@ int main(int argc, char *argv[]){
         print_help();
         exit(0);
     }
+    if(ap_found(parser, "memset")) {
+        printf("Calling memset on allocated memory\n");
+        g_memset = 1;
+    }
     int pos_arg_count = ap_count_args(parser);
     if(pos_arg_count != 1) {
         print_help();
@@ -118,7 +129,7 @@ int main(int argc, char *argv[]){
 
     int len=strlen(memory_to_eat);
     char unit=memory_to_eat[len - 1];
-    long size=-1;
+    long unsigned size=-1;
     int chunk=1024;
     if(!isdigit(unit) ){
         if(unit=='M' || unit=='G'){
@@ -146,7 +157,7 @@ int main(int argc, char *argv[]){
 
     // Timeout should should be equal to or greater than the gradual timeout
     // Since gradual_timeout will alloc mem each sec, then wait for timeout sec
-    if(timeout < gradual_timeout) {
+    if(timeout != -1 && gradual_timeout != -1 && timeout < gradual_timeout) {
       printf("<gradual_timeout> must be less-than or equal-to <timeout>");
       exit(1);
     }
@@ -170,19 +181,21 @@ int main(int argc, char *argv[]){
     for(long i=0;i<alloc_count;i+=1){
         short** eaten = eat(alloc_size, chunk);
         all_eaten_chunks[i] = eaten;
+        printf("Eaten chunk memory address %p\n", eaten);
         if(!eaten){
             fprintf(stderr, "ERROR: Could'nt allocate %ld MB of memory\n", B2MB(alloc_size));
-            timeout = 0;
+            // Timeout will be 0 after timeout - gradual_timeout
+            timeout = gradual_timeout;
             break;
         }else {
             printf("%ld: Allocated %ld MB of memory\n",i, B2MB(alloc_size));
         }
         sleep(1);
-        timeout--;
 	}
+    timeout -= gradual_timeout;
     if(all_eaten_chunks){
 #ifdef MEMORY_PERCENTAGE
-        printf("Currently avail memory (after alloc): %zd GB\n", B2GB(getFreeSystemMemory()));
+        printf("Currently avail memory (after alloc): %zd MB\n", B2MB(getFreeSystemMemory()));
 #endif
         if(timeout < 0 && isatty(fileno(stdin))) {
             printf("Done, press ENTER to free the memory\n");
@@ -193,7 +206,7 @@ int main(int argc, char *argv[]){
         } else {
             printf("Done, kill this process to free the memory\n");
             while(true) {
-                sleep(1);
+                sleep(5);
             }
         }
         for(long i=0;i<alloc_count;i+=1){
